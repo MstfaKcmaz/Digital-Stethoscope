@@ -1,0 +1,522 @@
+classdef Visualizing_GUILLLENSONat < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        UIFigure                   matlab.ui.Figure
+        FilteredSettingsKnob       matlab.ui.control.DiscreteKnob
+        FilteredSettingsKnobLabel  matlab.ui.control.Label
+        FilterTypeDropDown         matlab.ui.control.DropDown
+        FilterTypeDropDownLabel    matlab.ui.control.Label
+        OrderKnob                  matlab.ui.control.DiscreteKnob
+        OrderKnobLabel             matlab.ui.control.Label
+        Label2                     matlab.ui.control.Label
+        RPMLabel                   matlab.ui.control.Label
+        BPMLabel                   matlab.ui.control.Label
+        LableLabel                 matlab.ui.control.Label
+        EditOrderEditField         matlab.ui.control.NumericEditField
+        EditOrderEditFieldLabel    matlab.ui.control.Label
+        LowpassfcEditField         matlab.ui.control.NumericEditField
+        LowpassfcEditFieldLabel    matlab.ui.control.Label
+        HighpassfcEditField        matlab.ui.control.NumericEditField
+        HighpassfcEditFieldLabel   matlab.ui.control.Label
+        StopButton                 matlab.ui.control.Button
+        StartButton                matlab.ui.control.Button
+        UIAxes_4                   matlab.ui.control.UIAxes
+        UIAxes_3                   matlab.ui.control.UIAxes
+        UIAxes_2                   matlab.ui.control.UIAxes
+        UIAxes                     matlab.ui.control.UIAxes
+    end
+
+
+     properties (Access = private)
+        a 
+        f
+        f1
+        Y
+        Y1
+        P1
+        P2
+        P3
+        P4
+        filteredPlot
+        rawPlot
+        serialport
+        Fs = 8000;
+        fs = 5000;
+        fc1 = 30;
+        fc2 = 200;
+        T = 1/5000;
+        n = 1;
+        m = 1;
+        m1 = 1;
+        plotWindow = 2000;
+        IsRunning = false;
+        Timer
+        Data
+        ffData
+        fdata 
+        coefficient_1
+        coefficient_2
+        fc3=30
+        bpm
+        coefficient_3
+        coefficient_4
+        orderOfFilter=4;
+        end
+
+    methods (Access = private)
+        
+        function timerCallback = func(app)
+            if ~app.IsRunning
+            stop(app.Timer);
+        end
+    end
+ end
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Code that executes after component creation
+        function startupFcn(app)
+            app.IsRunning=true;
+            app.Timer=timer;
+            app.Timer.Period=0.1;
+            app.Timer.ExecutionMode='fixedRate';
+            app.Timer.TimerFcn=@(,)app.timerCallback;
+            start(app.Timer);
+
+            
+        end
+
+        % Button pushed function: StartButton
+        function StartButtonPushed(app, event)
+            app.IsRunning = true;
+            app.a = serialport("COM7", 19200);
+            configureTerminator(app.a, "CR/LF");
+            flush(app.a);
+            app.a.UserData = struct("Data", [], "Order", 1, "fData", [],"ffData",[]);
+            app.IsRunning = true;
+            
+            while app.a.UserData.Order < 100000
+                    app.Data = readline(app.a);
+                    app.a.UserData.Data(end+1) = str2double(app.Data);
+                    app.a.UserData.Order = app.a.UserData.Order + 1;
+                if mod(app.a.UserData.Order, 100) == 0
+                    configureCallback(app.a, "off");
+
+                    plot(app.UIAxes, app.a.UserData.Data(max(1,end-app.plotWindow+1):end))
+                      [app.coefficient_1, app.coefficient_2] = butter(4, app.fc3/(app.fs/2), 'high');
+        app.a.UserData.ffData = filter(app.coefficient_1, app.coefficient_2, app.a.UserData.Data(1:end));
+                    [app.coefficient_3, app.coefficient_4] = butter(app.orderOfFilter, [app.fc1/(app.fs/2), app.fc2/(app.fs/2)], 'bandpass');
+
+                    app.a.UserData.fData = filter(app.coefficient_3, app.coefficient_4, app.a.UserData.Data);
+                    
+                    plot(app.UIAxes_2, app.a.UserData.fData(max(1, end-app.plotWindow+1):end) * 3);
+                    drawnow;
+                    
+                    configureTerminator(app.a, "CR/LF");
+
+                end
+                 if mod(app.a.UserData.Order,500)==0
+                     configureCallback(app.a, "off");
+
+                     app.Y = fft(app.a.UserData.ffData(end-499+1:end));
+                     app.P2 = abs(app.Y / 500); % Use 400 for normalization
+                     app.f = app.fs * (0:(length(app.Y)/2))/length(app.Y); % Adjust frequency axis
+                     app.P1 = app.P2(1:length(app.Y)/2+1);
+                     app.P1(2:end-1) = 2 * app.P1(2:end-1);
+                     plot(app.UIAxes_3,app.f,app.P1,'Color','r');
+                     set(gca,'ylim',[0,10]);
+
+                     app.Y1 = fft(app.a.UserData.fData(end-499+1:end));
+                     app.P3 = abs(app.Y1 / 500); % Use 400 for normalization
+                     app.f1 = app.fs * (0:(length(app.Y1)/2))/length(app.Y1); % Adjust frequency axis
+                     app.P4 = app.P3(1:length(app.Y1)/2+1);
+                     app.P4(2:end-1) = 2 * app.P4(2:end-1);
+                     plot(app.UIAxes_4, app.f1,app.P4,'Color','r');
+                     set(gca,'ylim',[0,15]);
+
+                     grid on;
+                     app.m=app.m+500;
+                     configureTerminator(app.a,"CR/LF");
+                 end
+                 if mod(app.a.UserData.Order, 5000) == 0
+                    % Dinamik eşik belirleme
+                    signalSegment = app.a.UserData.Data(end-4999+1:end);
+
+    % Sinyali normalize et
+    normalizedSegment = (signalSegment - min(signalSegment)) / (max(signalSegment) - min(signalSegment));
+    
+    % Eşiği daha adaptif hale getir (ortalama + standart sapma)
+    threshold = mean(normalizedSegment) + 0.48 * std(normalizedSegment);
+    
+    % Tepe noktalarını bul (Minimum mesafe ekleyerek gürültüyü azalt)
+    [peaks, locs] = findpeaks(normalizedSegment, 'MinPeakHeight', threshold, 'MinPeakDistance', round(app.fs * 0.4));
+    
+    % BPM Hesaplama (Tepe noktaları arası süreye göre)
+    if numel(locs) > 1
+        % Eğer tepe noktalarının büyüklüğü 100'den küçükse, BPM hesapla
+        validPeaks = peaks(peaks < 100);
+        validLocs = locs(peaks < 100);
+        
+        if numel(validLocs) > 1
+            interPeakIntervals = diff(validLocs) / app.fs;  % Peak aralıkları saniyeye çevrilir
+            avgInterval = mean(interPeakIntervals);
+            app.bpm = 60 / avgInterval;  % BPM Hesaplama
+        else
+            app.bpm = 0;  % Yetersiz geçerli tepe noktası varsa
+        end
+    else
+        app.bpm = 0;  % Yetersiz tepe noktası varsa
+    end
+    
+    % BPM'i ekrana yazdır
+    disp(['Measured BPM: ', num2str(int16(app.bpm))]);
+    app.LableLabel.Text = num2str(int16(app.bpm));
+end
+                
+        end
+
+        % Button pushed function: StopButton
+        function StopButtonPushed(app, event)
+            app.IsRunning=false;
+            delete(app.a);
+        end
+
+        % Value changed function: LowpassfcEditField
+        function LowpassfcEditFieldValueChanged(app, event)
+            b=app.LowpassfcEditField.Value;
+            app.fc2=b;
+        end
+
+        % Value changed function: HighpassfcEditField
+        function HighpassfcEditFieldValueChanged(app, event)
+             c= app.HighpassfcEditField.Value;
+             app.fc1=c;
+        end
+
+        % Value changed function: EditOrderEditField
+        function EditOrderEditFieldValueChanged(app, event)
+            j = app.EditOrderEditField.Value;
+            app.orderOfFilter=j;
+        end
+
+        % Value changed function: FilterTypeDropDown
+        function FilterTypeDropDownValueChanged(app, event)
+            value = app.FilterTypeDropDown.Value;
+            
+        end
+
+        % Drop down opening function: FilterTypeDropDown
+        function FilterTypeDropDownOpening(app, event)
+            
+        end
+
+        % Clicked callback: FilterTypeDropDown
+        function FilterTypeDropDownClicked(app, event)
+            item = event.InteractionInformation.Item;
+            % Slider Value Changed callback function
+function SliderValueChanged(app, event)
+    sliderValue = app.Slider.Value; % Get the current slider value
+    app.fc2 = sliderValue; % Set Lowpass and Bandstop upper cutoff frequency (for example)
+    app.fc1 = sliderValue / 2; % Set Highpass lower cutoff frequency (example: slider value is used as reference)
+    
+    % Filter type selection based on Knob value
+    value = app.Knob.Value;  % Knob value to determine filter type
+    
+    switch value
+        case 'Low Pass'
+            [b, a] = butter(app.orderOfFilter, app.fc2/(app.fs/2), 'low');
+        case 'High Pass'
+            [b, a] = butter(app.orderOfFilter, app.fc1/(app.fs/2), 'high');
+        case 'Bandstop'
+            [b, a] = butter(app.orderOfFilter, [app.fc1 app.fc2]/(app.fs/2), 'stop');
+        case 'Bandpass'
+            [b, a] = butter(app.orderOfFilter, [app.fc1 app.fc2]/(app.fs/2), 'bandpass');
+    end
+    
+    % Apply filtered signal
+    filteredSignal = filter(b, a, app.a.UserData.Data);
+    
+    % Plot filtered signal
+    plot(app.UIAxes_2, filteredSignal);
+    title(app.UIAxes_2, ['Filtered Signal - ', value]);
+    xlabel(app.UIAxes_2, 'Time');
+    ylabel(app.UIAxes_2, 'Amplitude');
+    drawnow;
+             end
+        end
+        
+        end
+
+        % Value changed function: FilteredSettingsKnob
+        function FilteredSettingsKnobValueChanged(app, event)
+            value = app.FilteredSettingsKnob.Value;
+            
+        end
+
+        % Value changed function: OrderKnob
+        function OrderKnobValueChanged(app, event)
+            value = app.OrderKnob.Value;
+            
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create UIFigure and hide until all components are created
+            app.UIFigure = uifigure('Visible', 'off');
+            app.UIFigure.Color = [0.1686 0.7098 0.9412];
+            app.UIFigure.Position = [100 100 896 533];
+            app.UIFigure.Name = 'MATLAB App';
+
+            % Create UIAxes
+            app.UIAxes = uiaxes(app.UIFigure);
+            title(app.UIAxes, 'Raw Signal')
+            xlabel(app.UIAxes, 'Time')
+            ylabel(app.UIAxes, 'Y')
+            zlabel(app.UIAxes, 'Z')
+            app.UIAxes.FontName = 'Calibri';
+            app.UIAxes.FontWeight = 'bold';
+            app.UIAxes.YLim = [0 1000];
+            app.UIAxes.Position = [24 228 315 185];
+
+            % Create UIAxes_2
+            app.UIAxes_2 = uiaxes(app.UIFigure);
+            title(app.UIAxes_2, 'Filtered Signal')
+            xlabel(app.UIAxes_2, 'Time')
+            ylabel(app.UIAxes_2, 'Y')
+            zlabel(app.UIAxes_2, 'Z')
+            app.UIAxes_2.FontName = 'Calibri';
+            app.UIAxes_2.FontWeight = 'bold';
+            app.UIAxes_2.YLim = [-1000 1000];
+            app.UIAxes_2.Position = [364 237 316 167];
+
+            % Create UIAxes_3
+            app.UIAxes_3 = uiaxes(app.UIFigure);
+            title(app.UIAxes_3, 'Raw Signal FFT')
+            xlabel(app.UIAxes_3, 'Frequency')
+            ylabel(app.UIAxes_3, 'Y')
+            zlabel(app.UIAxes_3, 'Z')
+            app.UIAxes_3.FontName = 'Calibri';
+            app.UIAxes_3.FontWeight = 'bold';
+            app.UIAxes_3.Position = [24 44 315 166];
+
+            % Create UIAxes_4
+            app.UIAxes_4 = uiaxes(app.UIFigure);
+            title(app.UIAxes_4, 'Filtered Signal FFT')
+            xlabel(app.UIAxes_4, 'Frequency')
+            ylabel(app.UIAxes_4, 'Y')
+            zlabel(app.UIAxes_4, 'Z')
+            app.UIAxes_4.FontName = 'Calibri';
+            app.UIAxes_4.FontWeight = 'bold';
+            app.UIAxes_4.Position = [377 44 303 166];
+
+            % Create StartButton
+            app.StartButton = uibutton(app.UIFigure, 'push');
+            app.StartButton.ButtonPushedFcn = createCallbackFcn(app, @StartButtonPushed, true);
+            app.StartButton.BackgroundColor = [0.7176 0.2745 1];
+            app.StartButton.FontName = 'Calibri';
+            app.StartButton.FontSize = 18;
+            app.StartButton.FontWeight = 'bold';
+            app.StartButton.Position = [51 470 115 34];
+            app.StartButton.Text = 'Start';
+
+            % Create StopButton
+            app.StopButton = uibutton(app.UIFigure, 'push');
+            app.StopButton.ButtonPushedFcn = createCallbackFcn(app, @StopButtonPushed, true);
+            app.StopButton.BackgroundColor = [1 0.4118 0.1608];
+            app.StopButton.FontName = 'Calibri';
+            app.StopButton.FontSize = 18;
+            app.StopButton.FontWeight = 'bold';
+            app.StopButton.Position = [51 435 115 34];
+            app.StopButton.Text = 'Stop';
+
+            % Create HighpassfcEditFieldLabel
+            app.HighpassfcEditFieldLabel = uilabel(app.UIFigure);
+            app.HighpassfcEditFieldLabel.BackgroundColor = [1 1 0];
+            app.HighpassfcEditFieldLabel.HorizontalAlignment = 'right';
+            app.HighpassfcEditFieldLabel.FontName = 'Calibri';
+            app.HighpassfcEditFieldLabel.FontSize = 14;
+            app.HighpassfcEditFieldLabel.FontWeight = 'bold';
+            app.HighpassfcEditFieldLabel.Position = [425 471 77 22];
+            app.HighpassfcEditFieldLabel.Text = 'High pass fc';
+
+            % Create HighpassfcEditField
+            app.HighpassfcEditField = uieditfield(app.UIFigure, 'numeric');
+            app.HighpassfcEditField.ValueChangedFcn = createCallbackFcn(app, @HighpassfcEditFieldValueChanged, true);
+            app.HighpassfcEditField.FontName = 'Calibri';
+            app.HighpassfcEditField.FontSize = 14;
+            app.HighpassfcEditField.FontWeight = 'bold';
+            app.HighpassfcEditField.BackgroundColor = [1 1 0];
+            app.HighpassfcEditField.Position = [517 471 100 22];
+            app.HighpassfcEditField.Value = 30;
+
+            % Create LowpassfcEditFieldLabel
+            app.LowpassfcEditFieldLabel = uilabel(app.UIFigure);
+            app.LowpassfcEditFieldLabel.BackgroundColor = [1 1 0];
+            app.LowpassfcEditFieldLabel.HorizontalAlignment = 'right';
+            app.LowpassfcEditFieldLabel.FontName = 'Calibri';
+            app.LowpassfcEditFieldLabel.FontSize = 14;
+            app.LowpassfcEditFieldLabel.FontWeight = 'bold';
+            app.LowpassfcEditFieldLabel.Position = [431 503 71 22];
+            app.LowpassfcEditFieldLabel.Text = 'Low pass fc';
+
+            % Create LowpassfcEditField
+            app.LowpassfcEditField = uieditfield(app.UIFigure, 'numeric');
+            app.LowpassfcEditField.ValueChangedFcn = createCallbackFcn(app, @LowpassfcEditFieldValueChanged, true);
+            app.LowpassfcEditField.FontName = 'Calibri';
+            app.LowpassfcEditField.FontSize = 14;
+            app.LowpassfcEditField.FontWeight = 'bold';
+            app.LowpassfcEditField.BackgroundColor = [1 1 0];
+            app.LowpassfcEditField.Position = [517 503 100 22];
+            app.LowpassfcEditField.Value = 200;
+
+            % Create EditOrderEditFieldLabel
+            app.EditOrderEditFieldLabel = uilabel(app.UIFigure);
+            app.EditOrderEditFieldLabel.BackgroundColor = [1 1 0];
+            app.EditOrderEditFieldLabel.HorizontalAlignment = 'right';
+            app.EditOrderEditFieldLabel.FontName = 'Calibri';
+            app.EditOrderEditFieldLabel.FontSize = 14;
+            app.EditOrderEditFieldLabel.FontWeight = 'bold';
+            app.EditOrderEditFieldLabel.Position = [438 436 64 22];
+            app.EditOrderEditFieldLabel.Text = 'Edit Order';
+
+            % Create EditOrderEditField
+            app.EditOrderEditField = uieditfield(app.UIFigure, 'numeric');
+            app.EditOrderEditField.ValueChangedFcn = createCallbackFcn(app, @EditOrderEditFieldValueChanged, true);
+            app.EditOrderEditField.FontName = 'Calibri';
+            app.EditOrderEditField.FontSize = 14;
+            app.EditOrderEditField.FontWeight = 'bold';
+            app.EditOrderEditField.BackgroundColor = [1 1 0];
+            app.EditOrderEditField.Position = [517 436 100 22];
+            app.EditOrderEditField.Value = 4;
+
+            % Create LableLabel
+            app.LableLabel = uilabel(app.UIFigure);
+            app.LableLabel.BackgroundColor = [1 0 0];
+            app.LableLabel.FontName = 'Calibri';
+            app.LableLabel.FontWeight = 'bold';
+            app.LableLabel.Position = [320 471 55 33];
+            app.LableLabel.Text = 'Lable';
+
+            % Create BPMLabel
+            app.BPMLabel = uilabel(app.UIFigure);
+            app.BPMLabel.FontName = 'Calibri';
+            app.BPMLabel.FontSize = 14;
+            app.BPMLabel.FontWeight = 'bold';
+            app.BPMLabel.Position = [279 471 43 33];
+            app.BPMLabel.Text = 'BPM';
+
+            % Create RPMLabel
+            app.RPMLabel = uilabel(app.UIFigure);
+            app.RPMLabel.FontName = 'Calibri';
+            app.RPMLabel.FontSize = 14;
+            app.RPMLabel.FontWeight = 'bold';
+            app.RPMLabel.Position = [280 436 43 33];
+            app.RPMLabel.Text = 'RPM';
+
+            % Create Label2
+            app.Label2 = uilabel(app.UIFigure);
+            app.Label2.BackgroundColor = [1 0 0];
+            app.Label2.FontName = 'Calibri';
+            app.Label2.FontWeight = 'bold';
+            app.Label2.Position = [320 436 53 33];
+            app.Label2.Text = 'Label2';
+
+            % Create OrderKnobLabel
+            app.OrderKnobLabel = uilabel(app.UIFigure);
+            app.OrderKnobLabel.HorizontalAlignment = 'center';
+            app.OrderKnobLabel.FontName = 'Calibri';
+            app.OrderKnobLabel.FontSize = 14;
+            app.OrderKnobLabel.FontWeight = 'bold';
+            app.OrderKnobLabel.Position = [768 64 39 22];
+            app.OrderKnobLabel.Text = 'Order';
+
+            % Create OrderKnob
+            app.OrderKnob = uiknob(app.UIFigure, 'discrete');
+            app.OrderKnob.Items = {'1', '2', '3', '4'};
+            app.OrderKnob.ValueChangedFcn = createCallbackFcn(app, @OrderKnobValueChanged, true);
+            app.OrderKnob.FontName = 'Calibri';
+            app.OrderKnob.FontSize = 14;
+            app.OrderKnob.FontWeight = 'bold';
+            app.OrderKnob.Position = [749 101 60 60];
+            app.OrderKnob.Value = '1';
+
+            % Create FilterTypeDropDownLabel
+            app.FilterTypeDropDownLabel = uilabel(app.UIFigure);
+            app.FilterTypeDropDownLabel.HorizontalAlignment = 'right';
+            app.FilterTypeDropDownLabel.FontName = 'Calibri';
+            app.FilterTypeDropDownLabel.FontSize = 14;
+            app.FilterTypeDropDownLabel.FontWeight = 'bold';
+            app.FilterTypeDropDownLabel.Position = [681 457 66 22];
+            app.FilterTypeDropDownLabel.Text = 'Filter Type';
+
+            % Create FilterTypeDropDown
+            app.FilterTypeDropDown = uidropdown(app.UIFigure);
+            app.FilterTypeDropDown.Items = {'Butterworth', 'Chebyshev'};
+            app.FilterTypeDropDown.DropDownOpeningFcn = createCallbackFcn(app, @FilterTypeDropDownOpening, true);
+            app.FilterTypeDropDown.ValueChangedFcn = createCallbackFcn(app, @FilterTypeDropDownValueChanged, true);
+            app.FilterTypeDropDown.FontName = 'Calibri';
+            app.FilterTypeDropDown.FontSize = 14;
+            app.FilterTypeDropDown.FontWeight = 'bold';
+            app.FilterTypeDropDown.ClickedFcn = createCallbackFcn(app, @FilterTypeDropDownClicked, true);
+            app.FilterTypeDropDown.Position = [762 457 100 22];
+            app.FilterTypeDropDown.Value = 'Butterworth';
+
+            % Create FilteredSettingsKnobLabel
+            app.FilteredSettingsKnobLabel = uilabel(app.UIFigure);
+            app.FilteredSettingsKnobLabel.HorizontalAlignment = 'center';
+            app.FilteredSettingsKnobLabel.FontName = 'Calibri';
+            app.FilteredSettingsKnobLabel.FontSize = 14;
+            app.FilteredSettingsKnobLabel.FontWeight = 'bold';
+            app.FilteredSettingsKnobLabel.Position = [731 258 98 22];
+            app.FilteredSettingsKnobLabel.Text = 'Filtered Settings';
+
+            % Create FilteredSettingsKnob
+            app.FilteredSettingsKnob = uiknob(app.UIFigure, 'discrete');
+            app.FilteredSettingsKnob.Items = {'Lowpass', 'Highpass', 'Bandpass', 'Bandstop'};
+            app.FilteredSettingsKnob.ValueChangedFcn = createCallbackFcn(app, @FilteredSettingsKnobValueChanged, true);
+            app.FilteredSettingsKnob.FontName = 'Calibri';
+            app.FilteredSettingsKnob.FontSize = 14;
+            app.FilteredSettingsKnob.FontWeight = 'bold';
+            app.FilteredSettingsKnob.Position = [742 295 60 60];
+            app.FilteredSettingsKnob.Value = 'Lowpass';
+
+            % Show the figure after all components are created
+            app.UIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = Visualizing_GUILLLENSONat
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.UIFigure)
+
+            % Execute the startup function
+            runStartupFcn(app, @startupFcn)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.UIFigure)
+        end
+    end
+end
